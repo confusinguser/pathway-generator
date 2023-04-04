@@ -1,3 +1,4 @@
+#![warn(clippy::pedantic)]
 use std::io::stdout;
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
@@ -12,7 +13,7 @@ struct PathwayUI {
     terminal_display: TerminalDisplay,
 }
 
-async fn wait_until_mouse_drag() -> crossterm::event::MouseEvent {
+fn wait_until_mouse_drag() -> crossterm::event::MouseEvent {
     loop {
         let event = crossterm::event::read();
         match event {
@@ -23,7 +24,7 @@ async fn wait_until_mouse_drag() -> crossterm::event::MouseEvent {
                     }
                 }
             }
-            Err(e) => println!("Error: {:?}\n", e),
+            Err(e) => println!("Error: {e:?}\n"),
         }
     }
 }
@@ -42,19 +43,19 @@ fn main() -> crossterm::Result<()> {
     pathway_ui
         .terminal_display
         .update_display(TerminalDisplay::render_full_block_color(
-            &map_to_colors(&config.map),
+            &map_to_colors(&config.map.map),
             config.size.0,
         ));
 
     loop {
         let event = crossterm::event::read()?;
-        let action = handle_event(event, config.size);
+        let action = handle_event(&event, config.size);
         match action {
             Action::AddPathNode(col, row) => {
                 config.add_node_with_paths((col as f32, row as f32));
                 pathway_ui.terminal_display.update_display(
                     TerminalDisplay::render_full_block_color(
-                        &map_to_colors(&config.map),
+                        &map_to_colors(&config.map.map),
                         config.size.0,
                     ),
                 );
@@ -62,11 +63,11 @@ fn main() -> crossterm::Result<()> {
             Action::Start => {
                 config.clean_map();
                 crossterm::terminal::disable_raw_mode()?;
-                config.add_path_cells();
+                config.map.render_path_cells(&config.paths, config.size);
                 crossterm::terminal::enable_raw_mode()?;
                 pathway_ui.terminal_display.update_display(
                     TerminalDisplay::render_full_block_color(
-                        &map_to_colors(&config.map),
+                        &map_to_colors(&config.map.map),
                         config.size.0,
                     ),
                 );
@@ -104,7 +105,7 @@ enum Action {
     Nothing,
 }
 
-fn handle_event(event: Event, bounds: (u16, u16)) -> Action {
+fn handle_event(event: &Event, bounds: (u16, u16)) -> Action {
     match event {
         Event::Mouse(mouse_event) => match mouse_event.kind {
             MouseEventKind::Down(_btn) => {

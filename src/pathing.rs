@@ -9,31 +9,33 @@ pub(crate) enum CellType {
 #[derive(Debug)]
 pub(crate) struct Configuration {
     nodes: Vec<(f32, f32)>,
-    paths: Vec<Path>,
-    pub(crate) map: Vec<CellType>,
+    pub(crate) paths: Vec<Path>,
+    pub(crate) map: CellTypeMap,
     pub(crate) size: (u16, u16),
 }
 
-impl Configuration {
-    pub(crate) fn new(size: (u16, u16)) -> Self {
-        Self {
-            nodes: vec![],
-            paths: vec![],
-            map: vec![CellType::None; (size.0 * size.1) as usize],
-            size,
-        }
-    }
-    pub fn add_path_cells(&mut self) {
+#[derive(Debug, Clone)]
+struct CellTypeMap {
+    pub(crate) map: Vec<CellType>,
+}
+
+impl CellTypeMap {
+
+    pub fn render_path_cells(&mut self, paths: &[Path], size: (u16, u16)) {
         for (i, cell) in self.map.iter_mut().enumerate() {
             if *cell == CellType::Node {
                 continue;
             }
-            let cell_coords = (i as f32 % self.size.0 as f32, i as f32 / self.size.0 as f32);
+            let cell_coords = (i % size.0 as usize, i / size.0 as usize);
             let mut distances_to_lines = Vec::new();
             if i == 0 {
-                dbg!(&self.paths);
+                dbg!(paths);
             }
-            for path in &self.paths {
+            for path in paths {
+                if path.nodes.first().map_or(false, |x| x.0.round() as usize == cell_coords.0 && x.1.round() as usize == cell_coords.1) {
+*cell = CellType::Node;
+continue;
+                }
                 for pair in path.nodes.windows(2) {
                     let p1 = *pair.first().unwrap();
                     let p2 = *pair.last().unwrap();
@@ -46,7 +48,7 @@ impl Configuration {
             distances_to_lines.sort_by(|one, two| {
                 if one > two {
                     std::cmp::Ordering::Greater
-                } else if one == two {
+                } else if (one - two).abs() < f32::EPSILON {
                     std::cmp::Ordering::Equal
                 } else {
                     std::cmp::Ordering::Less
@@ -62,10 +64,28 @@ impl Configuration {
                 *cell = if value <= 2. {
                     CellType::Path
                 } else {
-                    let activ = activation_function(value) as u8 * 255;
+                    #[allow(clippy::cast_sign_loss)]
+                    let activ = (activation_function(value) * 255.) as u8;
                     CellType::Color(activ, activ, activ)
                 }
             }
+        }
+    }
+
+    fn new(vec: Vec<CellType>) -> CellTypeMap {
+        Self {
+            map: vec
+        }
+    }
+}
+
+impl Configuration {
+    pub(crate) fn new(size: (u16, u16)) -> Self {
+        Self {
+            nodes: vec![],
+            paths: vec![],
+            map: CellTypeMap::new(vec![CellType::None; (size.0 * size.1) as usize]),
+            size,
         }
     }
 
@@ -75,52 +95,123 @@ impl Configuration {
                 nodes: vec![node, *og_node],
             });
         }
-        self.map[node.1.round() as usize * self.size.0 as usize + node.0.round() as usize] =
-            CellType::Node;
         self.nodes.push(node);
     }
 
     pub(crate) fn clean_map(&mut self) {
-        for cell in self.map.iter_mut() {
+        for cell in &mut self.map {
             if *cell == CellType::Node {
                 continue;
             }
             *cell = CellType::None;
         }
     }
+    #[must_use]
+    fn evaluate_fitness(paths: Vec<Path>, total_num_of_pixels: usize) -> f32 {
+        let total_path_length_between_points: f32 = paths
+            .iter()
+            .map(|path| {
+                path.nodes
+                    .windows(2)
+                    .map(|a| dist(*a.first().unwrap(), *a.last().unwrap()))
+                    .sum::<f32>()
+            })
+            .sum();
+        1. / (total_num_of_pixels as f32 * total_path_length_between_points)
+    }
+
+    fn get_total_num_of_pixels(map: Vec<CellType>) {
+                let total_num_of_pixels: f32 = map // represents total length of path
+            .iter()
+            .copied()
+            .filter(|cell| *cell == CellType::Path)
+            .count() as f32;
+
+    }
+
+    fn optimise(&mut self) {
+        let mut paths_clone = self.paths.clone();
+        let mut map_clone = self.map.clone();
+        for path in &mut paths_clone {
+            let num_nodes = path.nodes.len();
+            for node in path.nodes.iter_mut().skip(1).take(num_nodes - 2) {
+                let fitness = Configuration::evaluate_fitness(paths_clone, );
+                let original_node = *node;
+                let mut new_fitnesses = Vec::new();
+                for direction in Direction::directions() {
+                    let mut modified_node = original_node;
+                    modified_node.0 += direction.get_vector().0 as f32;
+                    modified_node.1 += direction.get_vector().1 as f32;
+                    *node = modified_node;
+                    if 
+                }
+            }
+        }
+    }
 }
 
-#[derive(Debug)]
+enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl Direction {
+    fn get_vector(&self) -> (i32, i32) {
+        match *self {
+            Direction::Up => (0, -1),
+            Direction::Down => (0, 1),
+            Direction::Left => (-1, 0),
+            Direction::Right => (1, 0),
+        }
+    }
+
+    fn directions() -> Vec<Direction> {
+        vec![
+            Direction::Up,
+            Direction::Right,
+            Direction::Down,
+            Direction::Left,
+        ]
+    }
+}
+
+#[derive(Debug, Clone)]
 struct Path {
     nodes: Vec<(f32, f32)>,
 }
 
 /// Returns: (slope, offset)
+#[must_use]
 fn find_line_equation(p1: (f32, f32), p2: (f32, f32)) -> (f32, f32) {
     let slope = (p1.1 - p2.1) / (p1.0 - p2.0);
     (slope, p1.1 - p1.0 * slope)
 }
 
+#[must_use]
 fn find_closest_point_to_line(
     p1: (f32, f32),
     p2: (f32, f32),
     line: (f32, f32),
     point: (f32, f32),
 ) -> (f32, f32) {
-    if p1.0 == p2.0 {
+    if (p1.0 - p2.0).abs() < f32::EPSILON {
+        // Basically p1.0 == p2.0
         return (p1.0, point.1);
     }
-    if p1.1 == p2.1 {
+    if (p1.1 - p2.1).abs() < f32::EPSILON {
         return (point.0, p1.1);
     }
     let (slope, offset) = line;
-    let perpendicular_slope = -1f32 / slope;
+    let perpendicular_slope = -1. / slope;
     let perpendicular_offset = point.1 - perpendicular_slope * point.0;
     let intersect_x = (offset - perpendicular_offset) / (perpendicular_slope - slope);
     let intersect_y = slope * intersect_x + offset;
     (intersect_x, intersect_y)
 }
 
+#[must_use]
 fn find_closest_point_on_line_segment(
     p1: (f32, f32),
     p2: (f32, f32),
@@ -128,7 +219,7 @@ fn find_closest_point_on_line_segment(
     point: (f32, f32),
 ) -> (f32, f32) {
     let intersect_point = find_closest_point_to_line(p1, p2, line, point);
-    if p1.0 == p2.0 {
+    if (p1.0 - p2.0).abs() < f32::EPSILON {
         let (uppermost, lowermost) = if p1.1 > p2.1 { (p1, p2) } else { (p2, p1) };
         return if intersect_point.1 > uppermost.1 {
             uppermost
@@ -150,21 +241,24 @@ fn find_closest_point_on_line_segment(
     }
 }
 
+#[must_use]
 fn dist(p1: (f32, f32), p2: (f32, f32)) -> f32 {
-    ((p1.0 * (5. / 8.) - p2.0 * (5. / 8.)).powf(2f32)
+    ((p1.0 * (5. / 8.) - p2.0 * (5. / 8.)).powf(2.)
         + (p1.1 * (8. / 5.) - p2.1 * (8. / 5.)).powf(2.))
     .sqrt()
 }
 
+#[must_use]
 fn activation_function(x: f32) -> f32 {
     1. / (1. + (x - 4.).exp())
 }
 
+#[must_use]
 fn smooth_min(a: f32, b: f32, k: f32) -> f32 {
     let h = (0.5 + 0.5 * (a - b) / k).max(0.).min(1.);
     a * (1. - h) + b * h - k * h * (1. - h)
 }
-
+#[must_use]
 fn point_is_between_lines(line1: (f32, f32), line2: (f32, f32), point: (f32, f32)) -> bool {
     // That the lines' slopes have different signs means we should check the x-axis to see if point is between
     if line1.0.signum() == line2.0.signum() {
