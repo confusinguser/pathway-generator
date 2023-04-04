@@ -1,11 +1,12 @@
-mod pathing;
+use std::io::stdout;
 
-use std::{io::stdout};
-use crossterm::event::{Event, KeyCode, KeyEventKind, MouseEventKind};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use crossterm::style::Color;
-
 use terminal_pixel_renderer::TerminalDisplay;
+
 use crate::pathing::{CellType, Configuration};
+
+mod pathing;
 
 struct PathwayUI {
     terminal_display: TerminalDisplay,
@@ -28,9 +29,7 @@ async fn wait_until_mouse_drag() -> crossterm::event::MouseEvent {
 }
 
 fn main() -> crossterm::Result<()> {
-    let size = (crossterm::terminal::size()?.0, 60u16);
-    let mut nodes = Vec::new();
-    let mut pixels: Vec<Option<Color>> = vec![None; (size.0 * size.1) as usize];
+    let mut config = Configuration::new(crossterm::terminal::size()?);
     let mut pathway_ui = PathwayUI {
         terminal_display: TerminalDisplay::default(),
     };
@@ -40,34 +39,54 @@ fn main() -> crossterm::Result<()> {
     let mut stdout = stdout();
     crossterm::execute!(stdout, crossterm::event::EnableMouseCapture)?;
 
-    pathway_ui.terminal_display.update_display(TerminalDisplay::render_full_block_color(&pixels, size.0));
+    pathway_ui
+        .terminal_display
+        .update_display(TerminalDisplay::render_full_block_color(
+            &map_to_colors(&config.map),
+            config.size.0,
+        ));
 
     loop {
         let event = crossterm::event::read()?;
-        let action = handle_event(event, size);
+        let action = handle_event(event, config.size);
         match action {
             Action::AddPathNode(col, row) => {
-                pixels[(row * size.1 + col) as usize] = Some(Color::Blue);
-                nodes.push((col as f32, row as f32));
+                config.add_node_with_paths((col as f32, row as f32));
                 pathway_ui.terminal_display.update_display(
-                    TerminalDisplay::render_full_block_color(&pixels, size.0));
+                    TerminalDisplay::render_full_block_color(
+                        &map_to_colors(&config.map),
+                        config.size.0,
+                    ),
+                );
             }
             Action::Start => {
-                let mut config = create_configuration(&nodes, size);
+                config.clean_map();
+                crossterm::terminal::disable_raw_mode()?;
                 config.add_path_cells();
-                for (i, cell) in config.map.iter().enumerate() {
-                    pixels[i] = match cell {
-                        CellType::None => {Option::None}
-                        CellType::Path => {Some(Color::White)}
-                        CellType::Node => {Some(Color::Blue)}
-                    }
-                }
+                crossterm::terminal::enable_raw_mode()?;
                 pathway_ui.terminal_display.update_display(
-                    TerminalDisplay::render_full_block_color(&pixels, size.0));
+                    TerminalDisplay::render_full_block_color(
+                        &map_to_colors(&config.map),
+                        config.size.0,
+                    ),
+                );
             }
+            Action::Exit => std::process::exit(1),
             Action::Nothing => {}
         }
     }
+}
+
+fn map_to_colors(map: &[CellType]) -> Vec<Option<Color>> {
+    map.iter()
+        .map(|cell| match cell {
+            CellType::None => Option::None,
+            CellType::Path => Some(Color::White),
+            CellType::Node => Some(Color::Blue),
+
+            CellType::Color(r, g, b) => Some(Color::from((*r, *g, *b))),
+        })
+        .collect()
 }
 
 fn create_configuration(nodes: &Vec<(f32, f32)>, size: (u16, u16)) -> Configuration {
@@ -81,29 +100,43 @@ fn create_configuration(nodes: &Vec<(f32, f32)>, size: (u16, u16)) -> Configurat
 enum Action {
     AddPathNode(u16, u16),
     Start,
+    Exit,
     Nothing,
 }
 
 fn handle_event(event: Event, bounds: (u16, u16)) -> Action {
     match event {
-        Event::Mouse(mouse_event) => {
-            match mouse_event.kind {
-                MouseEventKind::Down(_btn) => {
-                    if mouse_event.column < bounds.0 && mouse_event.row < bounds.1 {
-                        Action::AddPathNode(mouse_event.column, mouse_event.row)
-                    } else {
-                        Action::Nothing
-                    }
+        Event::Mouse(mouse_event) => match mouse_event.kind {
+            MouseEventKind::Down(_btn) => {
+                let terminal_size = crossterm::terminal::size().unwrap();
+                if mouse_event.column < bounds.0
+                    && (mouse_event.row + bounds.1 + 1)
+                        .checked_sub(terminal_size.1)
+                        .map_or(false, |v| v < bounds.1)
+                {
+                    Action::AddPathNode(
+                        mouse_event.column,
+                        mouse_event.row + bounds.1 - terminal_size.1,
+                    )
+                } else {
+                    Action::Nothing
                 }
-                _ => Action::Nothing
             }
-        }
+            _ => Action::Nothing,
+        },
         Event::Key(key_event) => {
-            if KeyEventKind::Press == key_event.kind && key_event.code == KeyCode::Char('s') {
-                return Action::Start;
+            if KeyEventKind::Press == key_event.kind {
+                if key_event.code == KeyCode::Char('s') {
+                    return Action::Start;
+                }
+                if key_event.code == KeyCode::Char('c')
+                    && key_event.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    return Action::Exit;
+                }
             }
             Action::Nothing
         }
-        _ => Action::Nothing
+        _ => Action::Nothing,
     }
 }
